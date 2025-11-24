@@ -1,0 +1,224 @@
+---
+title: "Tutorial linkprediction"
+output:
+  html_document: default
+  pdf_document: default
+---
+# Ejemplo aplicación de link prediction
+
+#### Curso: Estructuración de Redes Sociales
+
+Autor: *Andrés Felipe Useche, MSc*
+
+```{r setup, include=FALSE}
+#Carguémos las librerías que vamos a necesitar----------
+library(linkprediction)
+library(igraph)
+library(tidyverse)
+library(readr)
+library(purrr)
+library(sna)
+```
+
+Para este ejemplo utilizaremos la red de colaboración de coautorías de artículos de redes en 2006. Un nodo es un investigador y un arco ocurre cuando colaboran en un artículo académico. La red consta de 379 nodos y 914 arcos.
+
+
+### Vamos a cargar los datos
+
+Cargamos la matriz y con ella creamos el grafo.
+
+```{r,warning=FALSE,message=FALSE}
+matriz_adj_2006 <- read_csv("C:/Users/mm.blanco10/OneDrive - Universidad de los Andes/Estructura de Redes Sociales/2022-20/Módulo 5/Actividad/ca-netscience.csv")
+matriz_adj_2006<- as.data.frame(matriz_adj_2006)
+rownames(matriz_adj_2006) <- c(matriz_adj_2006[,1])
+matriz_adj_2006 <- matriz_adj_2006[,-1]
+#matriz_adj_2006$X1<-NULL
+
+matriz_adj_2007 <- read_csv("C:/Users/mm.blanco10/OneDrive - Universidad de los Andes/Estructura de Redes Sociales/2022-20/Módulo 5/Actividad/ca-netscience2.csv")
+matriz_adj_2007<- as.data.frame(matriz_adj_2007)
+rownames(matriz_adj_2007) <- c(matriz_adj_2007[,1])-1
+matriz_adj_2007 <- matriz_adj_2007[,-1]
+#matriz_adj_2007$...1<-NULL
+
+
+A=as.matrix.data.frame(matriz_adj_2006)
+g <- graph_from_adjacency_matrix(A,mode = "undirected",add.rownames = "code")
+rm(A)
+
+A2=as.matrix.data.frame(matriz_adj_2007)
+g2<-graph_from_adjacency_matrix(A2,mode = "undirected",add.rownames = "code")
+rm(matriz_adj_2007,A2)
+
+```
+
+Ahora que ya tenemos lista la información básica, vamos a empezar a explorar unos de los métodos que vimos en clase y verificar cómo validar la efectividad de dicho método para las predicciones. La librería que vamos a utilizar es **linkprediction**. La función que aplicaremos es el de vecinos más comúnes sobre la red de 2006 para pronosticar la de 2007.
+
+```{r}
+#https://www.rdocumentation.org/packages/linkprediction/versions/1.0-0/topics/proxfun
+#General function for calculating several types of vertex proximities in a graph.
+#"cn": Common Neighbours
+
+cn <- proxfun(g,method = "cn",value = "edgelist")
+```
+
+Veamos la distribución del score de nuestro método.
+
+```{r}
+table(cn$value)
+#Edges with similarity score 0 are omitted.
+```
+Dado que hay scores con valores altos, vamos a tomar como punto de corte que tenga al menos 2 vecinos comúnes. 
+Vamos a filtrar para que solo tome arcos entre diferentes nodo i y j
+
+```{r}
+cn<-cn%>%
+  filter(from<to)%>%
+  filter(value>=2)
+```
+
+Con estas predicciones vamos a rellenar la matriz de adyacencia y recalculamos el nuevo grafo predicho de 2007.
+
+```{r}
+n<-length(cn$from)
+matriz_adj_predicha<-matriz_adj_2006
+for(i in 1:n){
+  matriz_adj_predicha[cn$from[i],cn$to[i]]<-1
+  matriz_adj_predicha[cn$to[i],cn$from[i]]<-1
+}
+```
+
+Con la nueva matriz creamos nuestro grafo predicho. Para poder comparar con la matriz de confusión vamos a crear dos dataframes con los pesos de todos los posibles arcos y los vamos a comparar.
+
+```{r}
+rm(cn,matriz_adj_2006,i,n)
+Apredicho=as.matrix.data.frame(matriz_adj_predicha)
+gpredicho<-graph_from_adjacency_matrix(Apredicho,mode = "undirected")
+rm(Apredicho,matriz_adj_predicha)
+
+testdf2<- tidyr::crossing(
+  from=seq(1,vcount(g)),
+  to=seq(1,vcount(g))
+)
+testdf2$merge<-paste(testdf2$from,testdf2$to,sep = "-")
+
+testdf_predicho<- tidyr::crossing(
+  from=seq(1,vcount(gpredicho)),
+  to=seq(1,vcount(gpredicho))
+)
+testdf_predicho$merge<-paste(testdf_predicho$from,testdf_predicho$to,sep = "-")
+
+testdf<- tidyr::crossing(
+  from=seq(1,vcount(g2)),
+  to=seq(1,vcount(g2))
+)
+testdf$merge<-paste(testdf$from,testdf$to,sep = "-")
+
+
+```
+
+Vamos a juntar todos los arcos posibles con los reales para los datos de 2007 y para nuestras predicciones. De igual manera, lo hacemos para los datos de 2006 que usaremos después.
+
+```{r}
+#2006
+edges<-data.frame(as_edgelist(g))%>%
+  mutate(from = as.numeric(X1)+1,
+         to = as.numeric(X2)+1,
+         weight = 1)
+edges<-edges[,c("from","to","weight")]
+edges$merge<-paste(edges$from,edges$to,sep="-")
+
+testdf<-testdf%>%
+  left_join(edges,by=c("merge"="merge"))
+testdf<-testdf[,c("from.x","to.x","merge","weight")]
+testdf[is.na(testdf)]<-0
+
+#2007
+edges2<-data.frame(as_edgelist(g2))%>%
+  mutate(from = as.numeric(X1)+1,
+         to = as.numeric(X2)+1,
+         weight = 1)
+edges2<-edges2[,c("from","to","weight")]
+edges2$merge<-paste(edges2$from,edges2$to,sep="-")
+
+testdf2<-testdf2%>%
+  left_join(edges2,by=c("merge"="merge"))
+testdf2<-testdf2[,c("from.x","to.x","merge","weight")]
+testdf2[is.na(testdf2)]<-0
+
+#Predicciones 2007 con los datos del 2006
+edges_predichos<-data.frame(as_edgelist(gpredicho))%>%
+  mutate(from = as.numeric(X1)+1,
+         to = as.numeric(X2)+1,
+         weight = 1)
+edges_predichos<-edges_predichos[,c("from","to","weight")]
+edges_predichos$merge<-paste(edges_predichos$from,edges_predichos$to,sep="-")
+
+testdf_predicho<-testdf_predicho%>%
+  left_join(edges_predichos,by=c("merge"="merge"))
+testdf_predicho<-testdf_predicho[,c("from.x","to.x","merge","weight")]
+testdf_predicho[is.na(testdf_predicho)]<-0
+```
+
+Finalmente vamos a comparar nuestros resultados. Para esto, la comparación debe hacerse solamente sobre los arcos que en los datos reales que cambiaron de 2006 a 2007, de lo contrario estaríamos sobredimensionando la efectividad del método de predicción
+
+```{r}
+colnames(testdf2)<-c("from2","to2","merge2","weight2")
+cambios_reales<-cbind(testdf,testdf2)%>%
+  mutate(cambio = if_else(weight!=weight2,1,0))%>%
+  filter(cambio==1)
+cambios_reales<-cambios_reales[,c("merge","weight2")]
+
+```
+
+Creemos ahora un dataframe para ver cuales fueron los arcos que pronosticamos.
+
+```{r}
+
+colnames(testdf_predicho)<-c("fromp","top","mergep","weightp")
+cambios_predichos<-cbind(testdf,testdf_predicho)%>%
+  mutate(cambio = if_else(weight!=weightp,1,0))%>%
+  filter(cambio==1)
+cambios_predichos<-cambios_predichos[,c("merge","weightp")]
+
+```
+
+Juntamos los arcos para saber el total de cambios que se deben evaluar en la matriz de confusión
+```{r}
+arcos_para_matriz<-unique(c(cambios_reales$merge,cambios_predichos$merge))
+```
+
+Filtramos los tests para que solo incluyan la muestra que acabamos de identificar
+
+```{r}
+testdf_predicho<-testdf_predicho[testdf_predicho$mergep%in%arcos_para_matriz,]
+testdf2<-testdf2[testdf2$merge2%in%arcos_para_matriz,]
+```
+
+Calculamos la matriz de confusión.
+
+```{r}
+table(testdf_predicho$weightp,testdf2$weight2)
+```
+
+#### *Qué podrían concluir con respecto a la predicción?*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

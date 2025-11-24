@@ -1,0 +1,307 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+<h1>Modelos de campo medio</h1> </center>
+
+<br />
+En este notebook podrá practicar la implementación de modelos compartimentales desde la perspectiva de campo medio en R. Este notebook se divide en dos partes. La primera parte se enfoca en implementar modelos SIS y SIR a través de métodos de solución de ecuaciones diferenciales. La segunda parte se enfoca en implementar un modelo de agentes para modelar una dinámica SIS y SIR.
+
+<br />
+
+#### Instalando y cargando librerías
+
+En caso que no tenga instaladas las siguientes librerías, corra el siguiente bloque de código para instalarlas.
+
+```{r}
+#install.packages(c("tidyverse","deSolve","ggplot2"))
+```
+
+Cargue las librerías que vamos a utilizar
+
+```{r,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(deSolve)
+library(ggplot2)
+```
+
+#### Implementando modelos SIS y SIR con ecuaciones diferenciales
+
+Vamos a empezar por el modelo SIS. Solamente como un recordatorio, tenemos que que este modelo se describe a partir de las siguientes ecuaciones diferenciales:
+
+$$\frac {dS}{dt}=-\frac{\lambda SI}{N}+\mu I$$
+$$\frac {dI}{dt}=\frac{\lambda SI}{N}-\mu I$$
+
+Donde *lambda* corresponde a la probabilidad de infección, *mu* corresponde al periodo infeccioso o tasa de recuperación y *N* corresponde a la población total.
+
+Para resolver estas ecuaciones vamos a utilizar la librería **deSolve**. Dentro de este paquete vamos a utilizar la función **ode**. Esta función luce de la siguiente manera:
+
+                    ode(y, times, func, parms, 
+                        method = c("lsoda", "lsode", "lsodes", "lsodar", "vode", "daspk",
+                        "euler", "rk4", "ode23", "ode45", "radau", 
+                        "bdf", "bdf_d", "adams", "impAdams", "impAdams_d", "iteration"),
+                        ...)
+
+En general, para definir esta función necesitamos saber los valores iniciales de las variables de estado *y*, la serie de tiempo (*times*) para las que se quiere solución y la función (*func*) que se va a resolver. Parar ingresar esta función tenemos que escribir un programa que represente los diferentes elementos del modelo SIS. Esta implementación sería la siguiente:
+
+```{r}
+sis.model<-function(t,x,parametros){
+  #Extraer las variables de estado
+  S <- x[1]
+  I <- x[2]
+  
+  #Extraer los parámetros
+  lambda <- parametros["lambda"]
+  mu <- parametros["mu"]
+  N <- S + I
+  
+  #Ahora el código que modela las ecuaciones
+  
+  dSdt <- -((lambda*S*I)/N) + mu*I #Ecuación para los susceptibles
+  dIdt <- ((lambda*S*I)/N) - mu*I #Ecuación para los infectados
+  
+  #Combinar los resultados en un vector unitario
+  
+  dxdt <- c(dSdt,dIdt)
+  
+  #Retornar los resultados como una lista
+  list(dxdt)
+}
+```
+
+Ya con la función creada, podemos definir los arreglos que van a tener la información de las condiciones iniciales:
+
+```{r}
+parametros <- c(lambda = 250, mu = 75) #Parámetros epidemiológicos
+times <- seq(from=0,to=60/365,by=1/365/4) #Línea de tiempo a evaluar
+xstart <- c(S = 1000,I = 2) #Parámetros iniciales para las poblaciones
+```
+
+Con la función y los parámetros definidos, solamente utilizamos la función **ode** para resolver la función creada. Vamos a guardar la información en un archivo llamado **salida**.
+
+```{r}
+ode(
+  func = sis.model,
+  method = "euler",
+  y = xstart,
+  times = times,
+  parms = parametros,
+)%>%
+  as.data.frame() -> salida
+```
+
+En el archivo **salida** vemos tres columnas: la primera con el tiempo, la segunda con los valores de t para los susceptibles y la tercera con los valores de t para los infectados. Ahora vamos a graficar los resultados de nuestras curvas:
+
+```{r}
+p<- salida %>%
+  gather(variable,value,-time) %>%
+  ggplot(aes(x=time,y=value,color=variable))+
+  geom_line(size=2)+
+  theme_classic()+
+  labs(x='Tiempo (yr)',y='Número de personas',color = "Variables")
+p
+```
+
+Veamos ahora como podemos visualizar diferentes gráficas en una misma grilla utilizando diferentes valores de *lambda* y *mu*. Empecemos generando diferentes valores para *lambda* y *mu*:
+
+```{r}
+valores_lambda <- c(25,50,75,100)
+valores_mu <- 50
+```
+
+Ahora vamos a combinar estos vectores junto con la función **ode** para resolver todas las combinaciones de parámetros:
+
+```{r}
+expand.grid(lambda=valores_lambda,mu=valores_mu)%>%
+  group_by(lambda) %>%
+  do(
+    {
+      ode(func=sis.model,y=xstart,times=times,
+        parms=c(lambda=.$lambda,mu=.$mu)) %>%
+        as.data.frame()
+    }
+  ) %>%
+  ggplot(aes(x=time,y=I))+
+  geom_line()+
+  facet_wrap(~lambda,scales='free_y',labeller=label_both)+
+  theme_bw()
+```
+
+En esta gráfica podemos ver cómo se comportan las curvas de infectados a medidas que van cambiando los parámetros. Ahora, vamos a graficar cómo cambia el número de infectados cuando el sistema se estabiliza frente a diferentes variaciones de mu.
+
+```{r}
+lambdas <- seq(from=0,to=150,by =1)
+mus <- rep(80,length(lambdas))
+Iestable <- rep(NA,length(lambdas))
+
+for(i in 1:length(lambdas)){
+  parametros <- c(lambda = lambdas[i], mu = mus[i]) #Parámetros epidemiológicos
+  times <- seq(from=0,to=120/365,by=1/365/4) #Línea de tiempo a evaluar
+  xstart <- c(S = 1000,I = 2) #Parámetros iniciales para las poblaciones
+  ode(
+    func = sis.model,
+    method = "euler",
+    y = xstart,
+    times = times,
+    parms = parametros,
+  )%>%
+    as.data.frame() -> salida
+  Iestable[i]<-salida$I[nrow(salida)]
+}
+
+salida<-data.frame(lambdas,Iestable)
+ggplot(data = salida,aes(x=lambdas,y=Iestable))+
+  geom_line(size=2)+
+  theme_classic()+
+  labs(x='Valores de lambda',y='I*')
+```
+
+Ahora intenta por tu cuenta construir la función para un modelo SIR. Recuerda que las fórmulas para el modelo SIR son las siguientes:
+
+$$\frac {dS}{dt}=-\frac{\lambda SI}{N}$$
+$$\frac {dI}{dt}=\frac{\lambda SI}{N}-\mu I$$
+$$\frac {dR}{dt}=\mu I$$
+
+Utiliza el siguiente espacio de código para construir la función:
+
+```{r}
+sir.model<-function(t,x,parametros){
+  #Extraer las variables de estado
+  
+  #Extraer los parámetros
+  
+  #Ahora el código que modela las ecuaciones
+  
+  #Combinar los resultados en un vector unitario
+  dxdt <- c(dSdt,dIdt,dRdt)
+  
+  #Retornar los resultados como una lista
+  list(dxdt)
+}
+```
+
+Cuando hayas implementado la función, corre el siguiente bloque para ver los resultados con unos parámetros iniciales:
+
+```{r}
+#parametros <- c(lambda = 250, mu = 75) #Parámetros epidemiológicos
+#times <- seq(from=0,to=60/365,by=1/365/4) #Línea de tiempo a evaluar
+#xstart <- c(S = 1000,I = 2, R=0) #Parámetros iniciales para las poblaciones
+
+#ode(
+#  func = sir.model,
+#  y = xstart,
+#  times = times,
+#  parms = parametros,
+#)%>%
+#  as.data.frame() -> salida2
+
+#salida2 %>%
+#  gather(variable,value,-time) %>%
+#  ggplot(aes(x=time,y=value,color=variable))+
+#  geom_line(size=2)+
+#  theme_classic()+
+#  labs(x='Tiempo (yr)',y='Número de personas',color = "Variables")
+
+rm(salida2,salida,parametros,valores_lambda,valores_mu,xstart,
+   sis.model,sir.model)
+```
+#### Utilizando modelos de agentes para simular una dinámica SIS y SIR
+
+El primer aspecto a tener en cuenta en la modelación de agentes es que tenemos individuos, homogéneos en principio (en las siguientes clases incluiremos mayor heterogeneidad). Para modelar de una manera más sencilla a nuestros agentes, vamos a separar los procesos de infección y recuperación. En este modelo vamos a suponer que cada agente tiene dos atributos: un identificador único y un estado (0 para susceptible y 1 para infectado). En cada momento de tiempo *t* los agentes infectados pueden tener *k_contactos* con agentes susceptible y en ese contacto lo pueden contagiar con una probabilidad *lambda*.
+
+Para la función que nos va a permitir modelar la infección vamos a utilizar como parámetros la base de datos que guarda el estado de los agentes (*df*), el número de contactos que cada agente infectado va a tener (*contactos*) y la probabilidad de infección (*lambda*).
+
+```{r}
+infectar <- function(df, contactos, lambda){
+  n_infectados <- nrow(df[df$estado==1,]) #Sacando el número de infectados
+  #Sacamos la muestra aleatoria de agentes susceptibles a infectar
+  muestra_a_infectar <- df[df$id%in%sample(df$id[df$estado==0],                                         min(n_infectados*contactos,nrow(df[df$estado==0,])),replace = T),]
+  aleatorio <- runif(nrow(muestra_a_infectar),0,1) #Se generan tantos aleatorios como infectados con la probabilidad lambda
+  chance <- as.integer(aleatorio<=lambda) #Se evalua si el aleatorio es menor o igual a lambda
+  df$estado[df$id%in%muestra_a_infectar$id]<-df$estado[df$id%in%muestra_a_infectar$id]+chance#Se cambia el estado a los agentes de la muestra
+  return(df)
+}
+```
+
+La recuperación sucede después de la infección y solamente ocurre con los agentes infectados en este momento. Cada agente infectado en cada momento *t* de tiempo tiene una probabilidad *mu* de recuperarse y volverse susceptible de nuevo. Para esta función vamos a ingresar por parámetro la base de datos que guarda el estado de los agentes (*df*) y la probabilidad de recuperación (*mu*).
+
+```{r}
+recuperar <- function(df,ids_infectados,mu){
+  aleatorio <- runif(length(ids_infectados),0,1) #Se generan tantos aleatorios como infectados con la probabilidad mu
+  chance <- as.integer(aleatorio<=mu) #Se evalua si el aleatorio es menor o igual a mu
+  df$estado[df$estado==1 & df$id%in%ids_infectados]<-df$estado[df$estado==1 & df$id%in%ids_infectados]-chance #Se cambia el estado
+  return(df)
+}
+```
+
+Ahora vamos a crear una función para recrear cada momento *t* de tiempo.
+
+```{r}
+paso<-function(df,lambda,mu,contactos){
+  ids_infectados<-df$id[df$estado==1]
+  df<-infectar(df,contactos,lambda)
+  df<-recuperar(df,ids_infectados,mu)
+  return(df)
+}
+```
+
+Finalmente, creamos la rutina para simular cada día. Inicialmente vamos a correr solamente una instancia del modelo. Sin embargo, la idea es poder correr diferentes instancias del mismo modelo para tener un intervalo de confianza de las curvas.
+
+```{r}
+N <- 1000 #Población inicial de agentes
+T <- 150 #Periodos de tiempo a simular
+n_infectados_iniciales <- 4 #Número de infectados iniciales
+df <- data.frame(id = 1:N,estado = rep(0,N))#Creamos la base con la inicialización de los identificadores y los estados
+
+#Asignando el infectado inicial
+
+df$estado[df$id%in%sample(df$id,n_infectados_iniciales)]<-1
+
+#Definimos los parámetros del modelo
+lambda <- 0.2
+mu <- 0.08
+contactos <- 1
+
+#Creamos las listas para guardar la información de los suceptibles e infectados
+infectados<-rep(NA,T)
+susceptibles<-rep(NA,T)
+
+for(i in 1:T){
+  #Guardamos la cantidad los infectados y susceptibles en las listas
+  infectados[i] <- nrow(df[df$estado==1,])
+  susceptibles[i] <- nrow(df[df$estado==0,])
+  df<-paso(df,lambda,mu,contactos) #Generamos un paso en el modelo
+}
+```
+
+Grafiquemos nuestras curvas:
+
+```{r}
+salida <-data.frame(time = times[1:length(susceptibles)],susceptibles,infectados)
+
+q<-salida %>%
+  gather(variable,value,-time) %>%
+  ggplot(aes(x=time,y=value,color=variable))+
+  geom_line(size=2)+
+  theme_classic()+
+  labs(x='Tiempo (yr)',y='Número de personas',color = "Variables")
+q
+```
+
+Ahora intente replicar por su cuenta el modelo SIR con la modelación de agentes.
+
+```{r}
+#Espacio para incluir las funciones del modelo SIR
+
+```
+
+#### Instrucciones para el trabajo final
+
+Para el trabajo final debe incluir, en un script realizado en RMarkdown, ambos tipos de simulaciones para el modelo SIR. Para cada modelación debe incluir los siguientes elementos:
+
+* El script con el código computacional que permite simular el modelo SIR.
+* Una gráfica que muestre los resultados de la simulación del SIR.
+* Unos párrafos incluyendo algunas conclusiones del ejercicio y las diferencias principales que encontró con respecto al modelo SIS en términos de la modelación.
+
